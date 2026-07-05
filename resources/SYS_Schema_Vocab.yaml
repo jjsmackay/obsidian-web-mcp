@@ -1,0 +1,173 @@
+# SYS_Schema_Vocab.yaml
+# ============================================================================
+# Machine-readable companion to SYS_Schema (v2.1) and the M2 Frontmatter
+# Governance Spec §4. The L2 validator loads THIS file at runtime; editing it is
+# a vault edit, not a redeploy.
+#
+# Human sources of truth (regenerate this file when either changes):
+#   - 90_System/91_Bobsidian/SYS_Schema.md              (types, statuses, flags, per-type fields, §9 collapse map)
+#   - 10_Projects/14_Rock Bottom/M2 - Frontmatter Governance Spec.md  (§4 path<->type table, exemptions, §11 naming)
+#
+# DEPLOY: copy to  90_System/91_Bobsidian/SYS_Schema_Vocab.yaml  in the vault.
+#
+# per_type_required ratified by Chris 2026-07-05.
+# ============================================================================
+
+schema_version: "v2.1"
+
+# Check 4 — the universal six-field core (SYS_Schema §1).
+core_fields:
+  - contributors
+  - created
+  - modified
+  - type
+  - status
+  - ai_flags
+
+# Check 3 — the 18 live types (SYS_Schema §2; jmp retired 2026-07-05, M2 §8b).
+types:
+  - atomic
+  - concept
+  - decision
+  - resource
+  - project
+  - meeting
+  - people
+  - organisation
+  - tool
+  - internal
+  - system
+  - competency
+  - holding
+  - company_cert
+  - equipment
+  - shms_doc
+  - incident
+  - session-recap
+
+# Check 5 — status lifecycle (SYS_Schema §3).
+statuses: ["#draft", "#review", "#approved", "#archived"]
+
+# Check 6 — ai_flags (SYS_Schema §4).
+ai_flags: ["#ai-ready", "#ai-ignore"]
+
+# Check 8 — fields validated as ISO 8601 when present (SYS_Schema §5 rule 3).
+date_fields: [created, modified, date, review_date]
+
+# Check 7 — per-type REQUIRED fields, off the core (SYS_Schema §6).
+# Ratified 2026-07-05. Only fields that MUST be present are listed; all other
+# §6 fields are defined for reference but NOT enforced by E007 (see comments).
+per_type_required:
+  project: [project_owner, plane_project]   # ratified
+  system: [version]                         # ratified
+  meeting: [date]                           # ratified; organisation, recording_link optional
+  organisation: [org_type]                  # ratified; account_owner optional
+  resource: [resource_kind]                 # ratified; author, url optional
+  people: []                                # ratified; location, company optional
+  tool: []                                  # ratified; tool_type, vendor, url optional
+  decision: []                              # ratified; review_date optional
+  # atomic, concept, internal -> core only (SYS_Schema §6).
+  # compliance/operational (competency, holding, company_cert, equipment,
+  #   shms_doc, incident, session-recap) -> domain/skill-owned fields; the
+  #   validator enforces the core only for these.
+
+# Check 9 — legacy field KEYS banned outright (SYS_Schema §5 rule 2 / §9).
+legacy_fields:
+  last_modified: "Use `modified`, not `last_modified` (SYS_Schema §5 rule 2)."
+
+# Check 9 — retired VALUES with a collapse-map replacement (SYS_Schema §9).
+# Applied to type / status / ai_flags values. Retired value -> canonical.
+collapse_map:
+  # retired ai_flags
+  "#ai-review": "#ai-ready (or #ai-ignore if the note is sensitive)"
+  # retired type values -> people / internal
+  person: people
+  brand: internal
+  # -> decision
+  adr: decision
+  decision-log: decision
+  decision-memo: decision
+  direction-decision: decision
+  # -> meeting
+  meeting-summary: meeting
+  # -> project
+  project_plan: project
+  architecture: project
+  vision: project
+  plan: project
+  scoping-document: project
+  direction-brief: project
+  coverage-matrix: project
+  release-gate-register: project
+  roadmap: project
+  # -> system
+  prompt: system
+  agent: system
+  instructions: system
+  # -> resource
+  persona: resource
+  slidepack: resource
+  slidedeck: resource
+  wiki: resource
+  knowledge: resource
+  reference: resource
+  business: resource
+  research: resource
+  report: resource
+  summary: resource
+  comparison: resource
+  guide: resource
+  briefing: resource
+  framework: resource
+  standard: resource
+  checklist: resource
+  notes: resource
+  proposal: resource
+  worksheet: resource
+  draft: resource
+
+# Check 10 — path<->type coherence table (M2 §4).
+# Pattern grammar: "dir/**" = any depth under dir; "dir/" = directly in dir only.
+path_type_table:
+  atomic: ["20_Knowledge/25_Atomic/"]
+  concept: ["20_Knowledge/24_Concepts/"]
+  people: ["20_Knowledge/21_People/", "70_People Insights/**"]
+  organisation: ["20_Knowledge/22_Organisations/"]
+  tool: ["20_Knowledge/23_Tools/"]
+  resource: ["30_Resources/**", "90_System/94_Wikis/"]
+  decision: ["40_Decisions/"]
+  meeting: ["50_Meetings/**"]
+  project: ["10_Projects/**"]
+  internal: ["80_Internal/**"]
+  system: ["90_System/**"]
+  competency: ["80_Internal/84_Personnel/Compliance/**"]
+  holding: ["80_Internal/84_Personnel/Compliance/**"]
+  company_cert: ["80_Internal/84_Personnel/Compliance/**"]
+  equipment: ["80_Internal/84_Personnel/Compliance/**"]
+  shms_doc: ["80_Internal/84_Personnel/Compliance/**"]
+  incident: ["80_Internal/85_Infrastructure/Incidents/"]
+  session-recap: ["60_Archive/Session_Recaps/"]
+
+# §4 override: archived notes keep their type regardless of path (E010 auto-pass).
+archive_override_paths: ["60_Archive/**"]
+
+# §6 exempt paths — skip ALL checks.
+exempt_paths:
+  - "00_Shotgun/**"
+  - ".trash/**"
+  - "90_System/99_Graph/**"
+  - "90_System/Reindex_Reports/**"
+  - "_HoldingPen/**"
+
+# Check 11 — zone-specific filename conventions (SYS_Schema §7).
+naming_rules:
+  - path: "50_Meetings/**"
+    regex: '^\d{4}-\d{2}-\d{2}_'
+    description: "Meetings need a YYYY-MM-DD_ filename prefix."
+  - path: "90_System/92_Templates/**"
+    regex: '^Tem_'
+    description: "Templates need a Tem_ filename prefix."
+  - path: "90_System/**"
+    if_type: system
+    regex: '^SYS_'
+    description: "System files in 90_System need a SYS_ prefix."

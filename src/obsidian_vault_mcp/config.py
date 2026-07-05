@@ -27,3 +27,28 @@ FRONTMATTER_INDEX_DEBOUNCE = 5.0
 # Rate limiting (requests per minute) -- track in-memory, enforce per-token
 RATE_LIMIT_READ = 100
 RATE_LIMIT_WRITE = 30
+
+# --- L2 write-boundary validator (M2 Frontmatter Governance) ---
+# All settings are runtime config, never code changes (M2 spec §6).
+# Mode: "warn" (write anyway + log + return warnings) or "block" (refuse).
+# Default is warn -- the live vault is largely non-conforming until cutover, so
+# a blocking validator would break live ops (M2 spec §6 bootstrap safety).
+VALIDATOR_MODE = os.environ.get("VALIDATOR_MODE", "warn").strip().lower()
+
+# Master kill-switch. When false the write path is completely untouched.
+VALIDATOR_ENABLED = os.environ.get("VALIDATOR_ENABLED", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
+# Vocabulary companion file (machine-readable mirror of SYS_Schema + the M2 §4
+# path<->type table). Loaded from the vault at runtime; edit-then-write round
+# trips without a redeploy. Path is relative to the vault root (or absolute).
+VALIDATOR_VOCAB_PATH = os.environ.get(
+    "VALIDATOR_VOCAB_PATH", "90_System/91_Bobsidian/SYS_Schema_Vocab.yaml"
+)
+
+# Violation log (JSONL). Written in BOTH modes (M2 spec §7). Relative to the
+# vault root (or absolute). Its default home is itself an exempt path.
+VALIDATOR_LOG_PATH = os.environ.get(
+    "VALIDATOR_LOG_PATH", "90_System/99_Graph/validator_log.jsonl"
+)

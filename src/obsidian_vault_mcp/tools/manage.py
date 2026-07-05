@@ -3,7 +3,8 @@
 import json
 import logging
 
-from ..vault import list_directory, move_path, delete_path, resolve_vault_path
+from ..vault import list_directory, move_path, delete_path, read_file, resolve_vault_path
+from ..validation import validate_move
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +38,28 @@ def vault_list(
 def vault_move(source: str, destination: str, create_dirs: bool = True) -> str:
     """Move a file or directory within the vault."""
     try:
+        # L2 path<->type coherence against the destination (M2 spec §2).
+        # Content is untouched, so only check 10 runs. Directory moves and
+        # unreadable sources are skipped (nothing to coordinate).
+        outcome = None
+        if destination.endswith(".md"):
+            try:
+                source_content, _ = read_file(source)
+                outcome = validate_move(source_content, destination, tool="vault_move")
+            except (FileNotFoundError, ValueError):
+                outcome = None
+        if outcome is not None and outcome.blocked:
+            return json.dumps({
+                "errors": outcome.errors, "mode": outcome.mode, "moved": False,
+                "source": source, "destination": destination,
+            })
+
         moved = move_path(source, destination, create_dirs=create_dirs)
-        return json.dumps({"source": source, "destination": destination, "moved": moved})
+        response = {"source": source, "destination": destination, "moved": moved}
+        if outcome is not None and outcome.has_violations:
+            response["warnings"] = outcome.errors
+            response["mode"] = outcome.mode
+        return json.dumps(response)
     except ValueError as e:
         return json.dumps({"error": str(e), "source": source, "destination": destination})
     except Exception as e:
