@@ -8,6 +8,7 @@ from .config import (
     CONTEXT_LINES,
     DEFAULT_SEARCH_RESULTS,
     MAX_BATCH_SIZE,
+    MAX_BINARY_SIZE,
     MAX_CONTENT_SIZE,
     MAX_LIST_DEPTH,
     MAX_SEARCH_RESULTS,
@@ -50,6 +51,40 @@ class VaultWriteInput(BaseModel):
     merge_frontmatter: bool = Field(
         default=False,
         description="If true, merge YAML frontmatter with existing file's frontmatter instead of replacing",
+    )
+
+
+class VaultWriteBinaryInput(BaseModel):
+    """Write an allowed binary file to the vault from base64-encoded content."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    path: str = Field(
+        ...,
+        description="Relative path from vault root",
+        min_length=1,
+        max_length=500,
+    )
+    data: str = Field(
+        ...,
+        description="Base64-encoded file content",
+        # base64 expands ~4/3; cap the encoded length so an oversized payload is rejected
+        # before it is decoded into memory.
+        max_length=((MAX_BINARY_SIZE + 2) // 3) * 4 + 1024,
+    )
+    media_type: str = Field(
+        ...,
+        description="MIME type of the binary content; must be in the server's allowlist",
+        min_length=3,
+        max_length=200,
+    )
+    overwrite: bool = Field(
+        default=False,
+        description="Overwrite an existing file at the target path",
+    )
+    create_dirs: bool = Field(
+        default=True,
+        description="Create parent directories if they don't exist",
     )
 
 
@@ -410,4 +445,61 @@ class VaultDailyNoteAppendInput(BaseModel):
         ...,
         description="Content to append to today's daily note (the note is created from the template if missing)",
         max_length=MAX_CONTENT_SIZE,
+    )
+
+
+class VaultAnalyticsSummaryInput(BaseModel):
+    """Build a compact analytics summary for a vault path."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    path_prefix: str | None = Field(
+        default=None,
+        description="Optional folder prefix to restrict the analysis",
+        max_length=500,
+    )
+    required_frontmatter: list[str] | None = Field(
+        default=None,
+        description="Optional required frontmatter fields to validate",
+        max_length=20,
+    )
+    max_examples: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Maximum example findings to include per category",
+    )
+
+
+class VaultAnalyticsFindingsInput(BaseModel):
+    """Return detailed findings for one analytics category."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    category: Literal[
+        "frontmatter_missing",
+        "required_frontmatter_missing",
+        "broken_wikilinks",
+        "suspicious_tag_variants",
+        "encoding_issues",
+        "oversized_files",
+    ] = Field(
+        ...,
+        description="Analytics finding category to return",
+    )
+    path_prefix: str | None = Field(
+        default=None,
+        description="Optional folder prefix to restrict the analysis",
+        max_length=500,
+    )
+    required_frontmatter: list[str] | None = Field(
+        default=None,
+        description="Optional required frontmatter fields to validate",
+        max_length=20,
+    )
+    max_results: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum number of findings to return",
     )

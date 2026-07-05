@@ -58,6 +58,7 @@ Found a vulnerability? Please report it privately rather than opening a public i
 | `vault_read` | Read a file, returning content, metadata, and parsed YAML frontmatter |
 | `vault_batch_read` | Read multiple files in one call; handles missing files gracefully |
 | `vault_write` | Write a file with optional frontmatter merging; creates parent dirs |
+| `vault_write_binary` | Write an allowed binary file (image/PDF) to the vault from base64 content; enforces a media-type allowlist (declared type/extension, not byte-sniffed) and size cap, writes atomically |
 | `vault_edit` | Patch a file with ordered exact text replacements (token-efficient partial edits); supports dry-run diff previews |
 | `vault_append` | Append content to the end of a file without resending the existing body; creates the file when missing |
 | `vault_batch_frontmatter_update` | Update YAML frontmatter fields on multiple files without touching body content |
@@ -72,6 +73,8 @@ Found a vulnerability? Please report it privately rather than opening a public i
 | `vault_daily_note_path` | Resolve today's daily-note path from the configured folder/format |
 | `vault_daily_note_read` | Read today's daily note; returns an error (does not create it) when missing |
 | `vault_daily_note_append` | Append to today's daily note, creating it from the template when missing |
+| `vault_analytics_summary` | Compact vault-hygiene summary: counts and examples of missing frontmatter, broken wikilinks, near-duplicate tag variants, and non-UTF-8 files |
+| `vault_analytics_findings` | Detailed findings for one analytics category (`frontmatter_missing`, `required_frontmatter_missing`, `broken_wikilinks`, `suspicious_tag_variants`, `encoding_issues`, `oversized_files`) |
 
 ## Prerequisites
 
@@ -131,8 +134,41 @@ All configuration is via environment variables:
 | `VAULT_DAILY_NOTES_TEMPLATE` | No | (none) | `strftime` template prepended when a daily note is first created |
 | `VAULT_MCP_HEARTBEAT_URL` | No | (none) | Optional push URL for an uptime monitor (Uptime Kuma, Healthchecks.io, ...). When set, a daemon thread GETs it on an interval. Must be `http(s)`; redirects are not followed and the URL is treated as a secret (never logged in full). Empty = disabled. |
 | `VAULT_MCP_HEARTBEAT_INTERVAL` | No | `60` | Seconds between heartbeat pings. Must be a positive integer; a bad value fails closed at startup. Only used when `VAULT_MCP_HEARTBEAT_URL` is set. |
+| `VAULT_AUDIT_LOG_PATH` | No | (none) | Append-only JSONL audit log of vault mutations. When set, every mutation appends one record; empty disables auditing. The raw bearer token is never written -- only its SHA-256 hash. Must resolve **outside** the vault and be writable; otherwise the server **fails closed** at startup. See [Audit logging](#audit-logging). |
+| `VAULT_AUDIT_LOG_INCLUDE_READS` | No | `false` | Also record read/search operations (`1`/`true`/`yes`/`on`). Off by default; mutations are always logged once the audit log is enabled. |
 
 Generate secrets with: `python -c "import secrets; print(secrets.token_hex(32))"`
+
+## Audit logging
+
+Set `VAULT_AUDIT_LOG_PATH` to a file path to record every vault mutation as an append-only
+JSON line. Auditing is **off by default**; with no path set there is no overhead. Reads and
+searches are logged too when `VAULT_AUDIT_LOG_INCLUDE_READS` is on (off by default, since
+reads are high-volume).
+
+Each record carries: `timestamp` (UTC), `token_id_hash` (SHA-256 of the bearer token -- the
+raw token is never written), `client_id` (a best-effort User-Agent hint), `operation`,
+`target_path`, `size_before`/`size_after`, `checksum_before`/`checksum_after` (SHA-256),
+`request_id`, `operation_status`, and `error`. Example line:
+
+```json
+{"checksum_after":"9f86d0…","checksum_before":null,"client_id":"claude","error":null,"operation":"vault_write","operation_status":"success","request_id":"a1b2…","size_after":42,"size_before":null,"target_path":"notes/today.md","timestamp":"2026-06-14T18:30:00+00:00","token_id_hash":"5e88…"}
+```
+
+**Put the log outside the vault.** `VAULT_AUDIT_LOG_PATH` must resolve outside `VAULT_PATH`.
+A log inside the vault would be just another file the vault tools can reach, so an
+authenticated caller could overwrite it (`vault_write`) or move it (`vault_delete`) and
+defeat the append-only premise. The server validates this at startup and **refuses to start
+(fail-closed)** if the path is not writable or resolves inside the vault.
+
+**Threat model — the log is best-effort at runtime, not tamper-evident.** A write failure
+at runtime is logged to the server log but never alters the tool result (the audit trail
+must not be able to break a write), so a record can be dropped silently; the server log is
+the only signal. Batch mutations emit one record per file with that file's own status, so a
+partial failure is never recorded as a whole-batch success. The unauthenticated `GET /health`
+endpoint reports only `{"status": "ok", "audit": {"enabled": <bool>}}` — it deliberately does
+not expose the log path or write counters (which would leak host filesystem layout and a
+vault-activity side-channel to anonymous callers over the tunnel).
 
 ## Connecting to Claude
 
@@ -280,6 +316,7 @@ you need) and run the server with `serve([YourExtension()])` from your own entry
 ```python
 from obsidian_vault_mcp.server import serve
 from obsidian_vault_mcp.extensions import Extension
+from obsidian_vault_mcp.write_events import register_write_listener
 
 
 class MyExtension(Extension):
@@ -290,6 +327,8 @@ class MyExtension(Extension):
     def before_indexes_start(self, frontmatter_index):
         # e.g. attach a change listener so no change is missed once the index starts
         frontmatter_index.add_change_listener(self._on_change)
+        # ...or react to a mutation as an operation (see write-event seam below)
+        register_write_listener(self._on_write)  # _on_write(operation, paths)
 
     def after_indexes_start(self, frontmatter_index):
         # e.g. start a periodic reconcile loop now that the index is live
@@ -326,7 +365,16 @@ Two things worth knowing:
   accidents; it is **not** a boundary against a hostile extension (which, running
   in-process, could bypass it anyway — see the trust model above).
 - **The stock server is unaffected.** With no extensions, `serve()` behaves exactly like
-  the previous `main()`; `FrontmatterIndex` change listeners are a no-op with none registered.
+  the previous `main()`; `FrontmatterIndex` change listeners and write listeners are a no-op
+  with none registered.
+- **Write listeners see mutations as operations.** Where `add_change_listener` is watcher-driven
+  (`(abs_path, exists)`, `.md` only, can't tell a tool write from an external edit),
+  `write_events.register_write_listener(cb)` fires `cb(operation, paths)` once per successful
+  mutation from the core write tools — `operation` is `"created"`/`"updated"`/`"moved"`/`"deleted"`,
+  a move passes `[source, destination]`, a batch passes only the paths it wrote. The publish
+  side, `fire_write(operation, paths)`, is public so an extension that writes on its own path
+  can join the same stream. Use it for a provenance-aware commit, an audit log, or a webhook;
+  a listener's exception is logged and swallowed.
 
 ## VPS Setup With Cloudflare Origin TLS + Caddy Reverse Proxy
 
