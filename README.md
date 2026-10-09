@@ -375,6 +375,18 @@ Two things worth knowing:
   side, `fire_write(operation, paths)`, is public so an extension that writes on its own path
   can join the same stream. Use it for a provenance-aware commit, an audit log, or a webhook;
   a listener's exception is logged and swallowed.
+- **Write guards can veto a mutation before it lands.** A listener can only react; a guard
+  runs first and can refuse. `write_guards.register_write_guard(cb)` consults
+  `cb(operation, path, content)` from every core write tool after it has computed the
+  content that would land and before it writes — `operation` is `"created"`/`"updated"`/`"moved"`,
+  `path` is where the write lands (a move passes the destination), `content` is the full
+  resulting text (bytes for a binary write; a moved `.md` passes the source text, else `None`).
+  Refuse by raising `WriteRejected(payload)`: the tool returns its usual error shape with
+  `"rejected": true` and the payload merged in, writes nothing and fires no write event. A
+  batch consults guards per file and reports a refusal in that file's result. Unlike a
+  listener, a guard **fails closed**: any other exception it raises also refuses the write.
+  Use it for a frontmatter schema check, a protected-path rule, or a secrets scan.
+  `vault_delete` is not guarded.
 
 ## VPS Setup With Cloudflare Origin TLS + Caddy Reverse Proxy
 

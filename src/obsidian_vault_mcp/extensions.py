@@ -17,7 +17,9 @@ Override only the hooks you need; the rest stay no-ops.
 To react to vault mutations *as operations* (a provenance-aware commit, an audit
 log, a webhook), subscribe from `before_indexes_start` via the write-event seam in
 `write_events` (`register_write_listener` / `fire_write`) -- the write-side mirror of
-`FrontmatterIndex.add_change_listener`.
+`FrontmatterIndex.add_change_listener`. To VETO a mutation before it lands (a schema
+check, a protected-path rule), register a guard via `write_guards`
+(`register_write_guard` / `WriteRejected`) from the same hook; guards fail closed.
 
 TRUST MODEL
 -----------

@@ -13,6 +13,7 @@ import string
 
 from ..serialization import dumps
 from ..vault import read_file, resolve_vault_path, write_file_atomic
+from ..write_guards import WriteRejected, run_write_guards
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,9 @@ def vault_canvas_add_node(path: str, node: dict) -> str:
             return dumps({"error": f"Node id already exists: {node_id}", "path": path})
 
         canvas["nodes"].append(node)
-        is_new, size = write_file_atomic(path, _canvas_body(canvas), create_dirs=True)
+        body = _canvas_body(canvas)
+        run_write_guards("updated" if resolve_vault_path(path).exists() else "created", path, body)
+        is_new, size = write_file_atomic(path, body, create_dirs=True)
         return dumps({
             "path": path,
             "created": is_new,
@@ -111,6 +114,8 @@ def vault_canvas_add_node(path: str, node: dict) -> str:
             "nodes": canvas["nodes"],
             "edges": canvas["edges"],
         })
+    except WriteRejected as e:
+        return dumps(e.response(path))
     except ValueError as e:
         return dumps({"error": str(e), "path": path})
     except Exception as e:
@@ -138,7 +143,9 @@ def vault_canvas_add_edge(path: str, edge: dict) -> str:
             return dumps({"error": f"Edge id already exists: {edge_id}", "path": path})
 
         canvas["edges"].append(edge)
-        is_new, size = write_file_atomic(path, _canvas_body(canvas), create_dirs=True)
+        body = _canvas_body(canvas)
+        run_write_guards("updated", path, body)
+        is_new, size = write_file_atomic(path, body, create_dirs=True)
         return dumps({
             "path": path,
             "created": is_new,
@@ -147,6 +154,8 @@ def vault_canvas_add_edge(path: str, edge: dict) -> str:
             "nodes": canvas["nodes"],
             "edges": canvas["edges"],
         })
+    except WriteRejected as e:
+        return dumps(e.response(path))
     except ValueError as e:
         return dumps({"error": str(e), "path": path})
     except Exception as e:

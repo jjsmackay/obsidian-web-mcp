@@ -3,8 +3,9 @@
 import logging
 
 from ..serialization import dumps
-from ..vault import list_directory, move_path, delete_path
+from ..vault import list_directory, move_path, delete_path, read_file, resolve_vault_path
 from ..write_events import fire_write
+from ..write_guards import WriteRejected, run_write_guards
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +36,28 @@ def vault_list(
         return dumps({"error": str(e)})
 
 
+def _moved_content(source: str):
+    """The text a move carries, for the write guards: a .md file's content, else None."""
+    if not source.endswith(".md"):
+        return None
+    try:
+        content, _ = read_file(source)
+        return content
+    except (FileNotFoundError, ValueError, UnicodeDecodeError):
+        return None
+
+
 def vault_move(source: str, destination: str, create_dirs: bool = True) -> str:
     """Move a file or directory within the vault."""
     try:
+        resolve_vault_path(destination)  # validate before any guard sees the path
+        run_write_guards("moved", destination, _moved_content(source))
         moved = move_path(source, destination, create_dirs=create_dirs)
         if moved:
             fire_write("moved", [source, destination])
         return dumps({"source": source, "destination": destination, "moved": moved})
+    except WriteRejected as e:
+        return dumps({**e.response(destination), "source": source, "destination": destination, "moved": False})
     except ValueError as e:
         return dumps({"error": str(e), "source": source, "destination": destination})
     except Exception as e:
