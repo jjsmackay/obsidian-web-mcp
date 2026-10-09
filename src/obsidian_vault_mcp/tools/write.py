@@ -13,6 +13,7 @@ from ..frontmatter_io import YAMLError
 from ..serialization import dumps
 from ..vault import resolve_vault_path, read_file, write_bytes_atomic, write_file_atomic
 from ..write_events import fire_write
+from ..write_guards import WriteRejected, run_write_guards
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,13 @@ def vault_write(path: str, content: str, create_dirs: bool = True, merge_frontma
                     "created": False,
                 })
 
+        run_write_guards("updated" if resolve_vault_path(path).exists() else "created", path, content)
         is_new, size = write_file_atomic(path, content, create_dirs=create_dirs)
 
         fire_write("created" if is_new else "updated", [path])
         return dumps({"path": path, "created": is_new, "size": size})
+    except WriteRejected as e:
+        return dumps({**e.response(path), "created": False})
     except ValueError as e:
         return dumps({"error": str(e), "path": path})
     except Exception as e:
@@ -124,8 +128,11 @@ def vault_write_binary(
                 "media_type": media_type,
             })
 
+        run_write_guards("updated" if resolved.exists() else "created", path, decoded)
         is_new, size = write_bytes_atomic(path, decoded, create_dirs=create_dirs, overwrite=overwrite)
         return dumps({"path": path, "created": is_new, "size": size, "media_type": media_type})
+    except WriteRejected as e:
+        return dumps({**e.response(path), "media_type": media_type})
     except ValueError as e:
         return dumps({"error": str(e), "path": path, "media_type": media_type})
     except Exception as e:
@@ -209,6 +216,7 @@ def vault_edit(path: str, edits: list[dict], dry_run: bool = False) -> str:
 
         changed = content != original_content
         if changed:
+            run_write_guards("updated", path, content)
             write_file_atomic(path, content, create_dirs=False)
             fire_write("updated", [path])
 
@@ -219,6 +227,15 @@ def vault_edit(path: str, edits: list[dict], dry_run: bool = False) -> str:
             "diff": diff,
             "edits_applied": len(edits),
             "size": size,
+        })
+    except WriteRejected as e:
+        return dumps({
+            **e.response(path),
+            "changed": False,
+            "dry_run": dry_run,
+            "diff": "",
+            "edits_applied": 0,
+            "size": 0,
         })
     except ValueError as e:
         return dumps({
@@ -279,6 +296,7 @@ def vault_append(
 
         changed = new_content != existing_content
         if changed:
+            run_write_guards("created" if created else "updated", path, new_content)
             _, size = write_file_atomic(path, new_content, create_dirs=create_dirs)
             fire_write("created" if created else "updated", [path])
         else:
@@ -290,6 +308,14 @@ def vault_append(
             "created": created,
             "appended": not created and changed,
             "size": size,
+        })
+    except WriteRejected as e:
+        return dumps({
+            **e.response(path),
+            "changed": False,
+            "created": False,
+            "appended": False,
+            "size": 0,
         })
     except ValueError as e:
         return dumps({
@@ -328,9 +354,12 @@ def vault_batch_frontmatter_update(updates: list[dict]) -> str:
                 post.metadata[key] = value
 
             new_content = frontmatter.dumps(post)
+            run_write_guards("updated", file_path, new_content)
             write_file_atomic(file_path, new_content, create_dirs=False)
 
             results.append({"path": file_path, "updated": True})
+        except WriteRejected as e:
+            results.append({**e.response(file_path), "updated": False})
         except FileNotFoundError:
             results.append({"path": file_path, "updated": False, "error": "File not found"})
         except ValueError as e:
